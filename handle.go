@@ -2,6 +2,7 @@ package httpp
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -11,7 +12,7 @@ import (
 func (s *Server) handle(conn net.Conn) {
 	defer func() {
 		if p := recover(); p != nil {
-			log.Println(p)
+			_, _ = conn.Write([]byte(fmt.Sprintf("HTTP/1.1 500 Internal Server Error\r\n%v\r\n\r\n", p)))
 			conn.Close()
 		}
 	}()
