@@ -1,6 +1,7 @@
 package httpp
 
 import (
+	"context"
 	"log"
 	"net"
 	"strings"
@@ -10,31 +11,132 @@ import (
 func (s *Server) handle(conn net.Conn) {
 	defer func() {
 		if p := recover(); p != nil {
+			log.Println(p)
 			conn.Close()
 		}
 	}()
 	s.setTimeout(conn)
 
-	method := make([]byte, 4)
-	if _, e := conn.Read(method); e != nil {
-		panic(e)
+	var method []byte
+	one := make([]byte, 1)
+	for {
+		if _, e := conn.Read(one); e != nil {
+			panic(e)
+		}
+		if one[0] == ' ' {
+			break
+		}
+		method = append(method, one[0])
 	}
-	if strings.ToUpper(string(method)) == "GET " {
-		s.handleGET(conn)
-	} else {
+	if strings.ToUpper(string(method)) == "CONNECT" {
 		if _, e := conn.Read(method); e != nil {
 			panic(e)
 		}
 		s.handleCONNECT(conn)
+	} else {
+		s.handleGeneral(conn, string(method))
 	}
 }
 
-func (s *Server) handleGET(conn net.Conn) {
-	_ = readRawLine(conn)
+func (s *Server) handleGeneral(conn net.Conn, method string) {
+	path := readRawLine(conn)
+	dp := strings.Index(path, ":") // scheme
+	path = path[dp+3:]
+	dp = strings.Index(path, "/") // path
+	path = path[dp:]
+	dp = strings.Index(path, " ") // HTTP/1.x
+	path = path[:dp]
+
+	sb := strings.Builder{}
+	_, _ = sb.WriteString(method)
+	_, _ = sb.WriteString(" ")
+	_, _ = sb.WriteString(path)
+	_, _ = sb.WriteString(" HTTP/1.1\r\n")
+
+	req := &Request{typ: method, clt: conn}
+	req.ctx, req.cancel = context.WithCancel(s.ctx)
+
+	var atype, credential string
+	key, value := readLine(conn)
+	for key != `\r\n` && value != `\r\n` {
+		switch strings.ToLower(key) {
+		case "host":
+			if strings.Index(value, ":") == -1 {
+				req.host = value + ":80"
+			} else {
+				req.host = value
+			}
+			_, _ = sb.WriteString(key)
+			_, _ = sb.WriteString(": ")
+			_, _ = sb.WriteString(value)
+			_, _ = sb.WriteString("\r\n")
+		case "proxy-authorization":
+			dp = strings.Index(value, " ")
+			// Let it panic if not a valid credential.
+			atype = strings.ToLower(value[:dp])
+			credential = value[dp+1:]
+		default:
+			_, _ = sb.WriteString(key)
+			_, _ = sb.WriteString(": ")
+			_, _ = sb.WriteString(value)
+			_, _ = sb.WriteString("\r\n")
+		}
+		key, value = readLine(conn)
+	}
+	_, _ = sb.WriteString("\r\n")
+	req.predata = []byte(sb.String())
+
+	if s.forceAuth {
+		if credential == "" {
+			authrequired(conn)
+			conn.Close()
+			return
+		}
+		s.amu.RLock()
+		if !s.auths[atype].Cred(credential) {
+			s.amu.RUnlock()
+			panic("auth: invalid credential")
+		}
+		s.amu.RUnlock()
+	}
+	s.reqs <- req
 }
 func (s *Server) handleCONNECT(conn net.Conn) {
 	_ = readRawLine(conn)
-	readEnd(conn)
+
+	req := &Request{typ: CONNECT, clt: conn}
+	req.ctx, req.cancel = context.WithCancel(s.ctx)
+
+	var atype, credential string
+	key, value := readLine(conn)
+	for key != `\r\n` && value != `\r\n` {
+		switch strings.ToLower(key) {
+		case "host":
+			req.host = value
+		case "proxy-authorization":
+			log.Println(key, value)
+			dp := strings.Index(value, " ")
+			// Let it panic if not a valid credential.
+			atype = strings.ToLower(value[:dp])
+			credential = value[dp+1:]
+		default:
+		}
+		key, value = readLine(conn)
+	}
+	if s.forceAuth {
+		if credential == "" {
+			authrequired(conn)
+			conn.Close()
+			return
+		}
+		s.amu.RLock()
+		if !s.auths[atype].Cred(credential) {
+			s.amu.RUnlock()
+			panic("auth: invalid credential")
+		}
+		s.amu.RUnlock()
+	}
+	s.reqs <- req
 }
 
 func readEnd(conn net.Conn) {
@@ -53,7 +155,7 @@ func readRawLine(conn net.Conn) (line string) {
 	sb := strings.Builder{}
 	defer func() {
 		line = sb.String()
-		log.Println("readRawLine=", line)
+		// log.Println("readRawLine=", line)
 	}()
 
 	var e error
@@ -95,7 +197,7 @@ func readLine(conn net.Conn) (key, value string) {
 	defer func() {
 		key = ksb.String()
 		value = vsb.String()
-		log.Println("readLine key=", key, "value=", value)
+		// log.Println("readLine key=", key, "value=", value)
 	}()
 
 	var e error

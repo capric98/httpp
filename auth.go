@@ -2,6 +2,7 @@ package httpp
 
 import (
 	"encoding/base64"
+	"net"
 	"sync"
 )
 
@@ -48,4 +49,12 @@ func (ba *BasicAuth) Del(c string) {
 	ba.rwmu.Lock()
 	delete(ba.creds, c)
 	ba.rwmu.Unlock()
+}
+
+func unauthorized(conn net.Conn) {
+	_, _ = conn.Write([]byte("HTTP/1.1 401 Unauthorized\r\n\r\n"))
+}
+
+func authrequired(conn net.Conn) {
+	_, _ = conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"))
 }

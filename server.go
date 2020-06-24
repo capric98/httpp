@@ -19,7 +19,7 @@ type Server struct {
 	cancel  context.CancelFunc
 	timeout time.Duration
 
-	reqs chan Request
+	reqs chan *Request
 }
 
 // NewServer news a Server.
@@ -29,7 +29,7 @@ func NewServer(addr string, forceAuth bool, timeout time.Duration) *Server {
 		forceAuth: forceAuth,
 		auths:     make(map[string]Authenticator),
 		timeout:   timeout,
-		reqs:      make(chan Request, 65535),
+		reqs:      make(chan *Request, 65535),
 	}
 }
 
@@ -70,6 +70,16 @@ func (s *Server) Listen() (e error) {
 // Stop a server before Listen() will cause panic.
 func (s *Server) Stop() {
 	s.cancel()
+}
+
+// Accept returns a valid request.
+// If the server is stopped, it will return nil.
+func (s *Server) Accept() (req *Request) {
+	select {
+	case <-s.ctx.Done():
+	case req = <-s.reqs:
+	}
+	return
 }
 
 // SetAuth sets an authenticator, it will overwrite
