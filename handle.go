@@ -20,6 +20,7 @@ func (s *Server) handle(conn net.Conn) {
 
 	var method []byte
 	one := make([]byte, 1)
+	// Read HTTP method.
 	for {
 		if _, e := conn.Read(one); e != nil {
 			panic(e)
